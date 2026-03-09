@@ -1,19 +1,35 @@
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Hello, World!</title>
-	</head>
-	<body>
-		<h1 id="heading"></h1>
-		<script>
-			fetch('/message')
-				.then((resp) => resp.text())
-				.then((text) => {
-					const h1 = document.getElementById('heading');
-					h1.textContent = text;
-				});
-		</script>
-	</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SnorkelGC API</title>
+    <style>
+      body { font-family: monospace; max-width: 640px; margin: 60px auto; padding: 0 20px; color: #1a1a1a; }
+      h1 { font-size: 1.4rem; margin-bottom: 4px; }
+      p  { color: #555; margin-top: 0; }
+      code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+      ul { line-height: 2; }
+      a  { color: #0070f3; }
+    </style>
+  </head>
+  <body>
+    <h1>🐟 SnorkelGC API</h1>
+    <p>Cloudflare Worker — datos meteorológicos en tiempo real para spots de snorkel en Gran Canaria.</p>
+
+    <h2>Endpoints</h2>
+    <ul>
+      <li><code>GET /api/spots</code> — condiciones de todos los spots</li>
+      <li><code>GET /api/spot/:id</code> — condiciones de un spot concreto</li>
+    </ul>
+
+    <h2>Pruébalo</h2>
+    <ul>
+      <li><a href="/api/spots">/api/spots</a></li>
+      <li><a href="/api/spot/las-canteras">/api/spot/las-canteras</a></li>
+      <li><a href="/api/spot/el-cabron">/api/spot/el-cabron</a></li>
+    </ul>
+
+    <p>Datos: <a href="https://open-meteo.com" target="_blank">Open-Meteo</a> · Caché: 1h · App: <a href="https://snorkelgc.pages.dev" target="_blank">SnorkelGC</a></p>
+  </body>
 </html>
