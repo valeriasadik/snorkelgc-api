@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "c:\\Users\\Usuario\\SnorkelGC\\src\\app\\shared\\models",
+      "c:\\Users\\Usuario\\SnorkelGC\\src\\app\\data\\services"
+    ]
+  }
+}
