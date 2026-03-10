@@ -1,5 +1,11 @@
 {
   "permissions": {
+    "allow": [
+      "Read(//c/Users/Usuario/SnorkelGC/src/assets/data/**)",
+      "Bash(curl -s \"https://snorkelgc-api.valeriasadik.workers.dev/api/spots\")",
+      "Bash(python3 -c \":*)",
+      "Bash(npx wrangler d1 execute snorkelgc-db --command=\"UPDATE spots SET lat = 28.16011063084463, lng = -15.435121249414243 WHERE id = ''confital''\" --remote)"
+    ],
     "additionalDirectories": [
       "c:\\Users\\Usuario\\SnorkelGC\\src\\app\\shared\\models",
       "c:\\Users\\Usuario\\SnorkelGC\\src\\app\\data\\services"

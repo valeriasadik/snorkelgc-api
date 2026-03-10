@@ -22,6 +22,13 @@
 			"binding": "CACHE",
 			"id": "d7822d6fe43b411d955d68be213f2c4c"
 		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "snorkelgc-db",
+			"database_id": "99c62ffd-8031-4a0e-ad85-bd2ac5cb81a5"
+		}
 	]
 	/**
 	 * Smart Placement

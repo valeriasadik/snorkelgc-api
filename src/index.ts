@@ -1,26 +1,29 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
-// Cada spot tiene coordenadas + dirección (en grados) desde la que el viento/oleaje le perjudica más
-const SPOTS: Record<string, { lat: number; lng: number; exposedTo: number }> = {
-  "las-canteras":  { lat: 28.14376,           lng: -15.433521,          exposedTo: 350 }, // N  — La Barra protege pero swell del norte pasa
-  "el-cabron":     { lat: 27.870666,          lng: -15.386634,          exposedTo: 90  }, // E  — costa este, levante lo arruina
-  "puerto-mogan":  { lat: 27.818044,          lng: -15.762344,          exposedTo: 315 }, // NW — bahía muy protegida
-  "confital":      { lat: 28.030225341301644, lng: -16.56255406216408,  exposedTo: 10  }, // N/NE — muy expuesto, sin protección // TODO: verificar coordenadas
-  "sardina-norte": { lat: 28.152858452818656, lng: -15.696619798760123, exposedTo: 315 }, // NW — cala protegida de alisios
-  "tufia":         { lat: 27.957974735351108, lng: -15.381852967612407, exposedTo: 90  }, // E  — costa este
-  "anfi-del-mar":  { lat: 27.772846046401682, lng: -15.695869943516328, exposedTo: 200 }, // SSW — laguna artificial, casi siempre bien
-  "puerto-rico":   { lat: 27.785613132672776, lng: -15.71285464930681,  exposedTo: 225 }, // SW — bahía muy resguardada
-  "guigui":        { lat: 27.948696387501787, lng: -15.827943541112543, exposedTo: 270 }, // W  — expuesto al swell atlántico
-  "playa-chica":   { lat: 28.14037965769678,  lng: -15.435942993415766, exposedTo: 350 }, // N  — similar a Las Canteras
-  "playa-nieves":  { lat: 28.100491260712374, lng: -15.709068406866088, exposedTo: 315 }, // NW — costa noroeste
-  "las-salinas":   { lat: 28.149562092984283, lng: -15.535417047601637, exposedTo: 350 }, // N  — costa norte muy expuesta
-  "el-burrero":    { lat: 27.910702195323154, lng: -15.387082230144685, exposedTo: 90  }, // E  — costa este
-};
+// ─── D1 row types ─────────────────────────────────────────────────────────────
+
+interface SpotRow {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  exposed_to: number;
+  difficulty: string;
+  description: string | null;
+  image_url: string | null;
+  entry_point: string | null;
+  best_time: string | null;
+}
+
+interface FacilityRow {
+  spot_id: string;
+  type: string;
+  available: number;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// WMO weather code → condición UI
 function mapWeatherCode(code: number): { condition: string; icon: string } {
   if (code === 0)  return { condition: "Sunny",         icon: "sunny"        };
   if (code <= 3)   return { condition: "Partly Cloudy", icon: "partly-sunny" };
@@ -31,27 +34,23 @@ function mapWeatherCode(code: number): { condition: string; icon: string } {
   return                   { condition: "Thunderstorm", icon: "thunderstorm" };
 }
 
-// Grados → dirección cardinal
 function degreesToCardinal(deg: number): string {
   const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
   return dirs[Math.round(deg / 45) % 8];
 }
 
-// Altura de ola → nivel snorkel
 function waveLevel(h: number): "Low" | "Medium" | "High" {
   if (h < 0.5) return "Low";
   if (h < 1.0) return "Medium";
   return "High";
 }
 
-// Visibilidad estimada: olas + periodo + tiempo
 function calcVisibility(
   waveH: number,
   wavePeriod: number,
   weatherCode: number
 ): { status: "Poor" | "Fair" | "Good" | "Excellent"; meters: number } {
   const isClear = weatherCode <= 3;
-  // Periodo largo = más resuspensión del fondo aunque la ola parezca pequeña
   const effectiveH = waveH * (wavePeriod > 10 ? 1.4 : 1.0);
   if (effectiveH < 0.3 && isClear) return { status: "Excellent", meters: 20 };
   if (effectiveH < 0.5 && isClear) return { status: "Good",      meters: 14 };
@@ -59,36 +58,84 @@ function calcVisibility(
   return                                   { status: "Poor",      meters: 4  };
 }
 
-// Idoneidad para snorkel según olas, periodo, viento y exposición del spot
-function calcSuitability(
+function calcScore(
   waveH: number,
   wavePeriod: number,
   windSpeed: number,
   windDeg: number,
-  exposedTo: number
-): "Excellent" | "Good" | "Fair" | "Poor" {
-  // ¿El viento viene de la dirección mala para este spot?
+  exposedTo: number,
+  weatherCode: number
+): number {
+  // Olas (40%) — factor más importante para snorkel
+  const waveScore = Math.max(0, Math.min(10, 10 - waveH * 6));
+
+  // Viento (25%)
+  const windScore = Math.max(0, Math.min(10, 10 - windSpeed / 4));
+
+  // Visibilidad por clima (20%)
+  const visScore = weatherCode <= 3 ? 10 : weatherCode <= 48 ? 6 : 3;
+
+  // Protección del spot (15%) — bonus si el viento no viene de la dirección adversa
   const diff = Math.abs(windDeg - exposedTo);
   const angleDiff = diff > 180 ? 360 - diff : diff;
-  const adverseWind = angleDiff < 60 && windSpeed > 15;
+  const exposureScore = angleDiff > 90 ? 10 : angleDiff > 60 ? 6 : 2;
 
-  // Periodo largo amplifica el efecto de la ola bajo el agua (surge)
-  const swellScore = waveH * (wavePeriod > 10 ? 1.5 : 1.0);
+  const raw = waveScore * 0.40 + windScore * 0.25 + visScore * 0.20 + exposureScore * 0.15;
+  return Math.round(raw * 10) / 10;
+}
 
-  if (swellScore < 0.4 && windSpeed < 15 && !adverseWind) return "Excellent";
-  if (swellScore < 0.7 && windSpeed < 25 && !adverseWind) return "Good";
-  if (swellScore < 1.2)                                    return "Fair";
+function scoreToSuitability(score: number): "Excellent" | "Good" | "Fair" | "Poor" {
+  if (score >= 8) return "Excellent";
+  if (score >= 6) return "Good";
+  if (score >= 4) return "Fair";
   return "Poor";
 }
 
-// ─── Fetch condiciones para un spot ──────────────────────────────────────────
+function facilitiesToFlags(rows: FacilityRow[]): {
+  parking: boolean;
+  showers: boolean;
+  restaurant: boolean;
+  lifeguard: boolean;
+} {
+  const has = (type: string) => rows.some(f => f.type === type && f.available === 1);
+  return {
+    parking:    has("parking"),
+    showers:    has("showers"),
+    restaurant: has("restaurant"),
+    lifeguard:  has("lifeguard"),
+  };
+}
 
-async function fetchConditions(spotId: string) {
-  const spot = SPOTS[spotId];
-  if (!spot) return null;
+// Agrupa filas de facilities por spot_id en un Map
+function groupFacilities(rows: FacilityRow[]): Map<string, FacilityRow[]> {
+  const map = new Map<string, FacilityRow[]>();
+  for (const row of rows) {
+    if (!map.has(row.spot_id)) map.set(row.spot_id, []);
+    map.get(row.spot_id)!.push(row);
+  }
+  return map;
+}
 
-  const { lat, lng, exposedTo } = spot;
+// ─── Fetch condiciones meteorológicas ─────────────────────────────────────────
 
+type ConditionsResult = {
+  score: number;
+  suitability: "Excellent" | "Good" | "Fair" | "Poor";
+  conditions: {
+    waves: { height: number; unit: string; level: string; period: number };
+    waterTemp: { value: number; unit: string };
+    weather: { condition: string; icon: string };
+    visibility: { status: string; meters: number };
+    wind: { speed: number; unit: string; direction: string };
+  };
+  lastUpdated: string;
+};
+
+async function fetchConditions(
+  lat: number,
+  lng: number,
+  exposedTo: number
+): Promise<ConditionsResult | null> {
   const [forecastRes, marineRes] = await Promise.all([
     fetch(
       `https://api.open-meteo.com/v1/forecast` +
@@ -113,95 +160,187 @@ async function fetchConditions(spotId: string) {
   const cur = forecast.current;
   const mar = marine.current;
 
-  const waveH: number       = mar.wave_height              ?? 0.5;
-  const wavePeriod: number  = mar.wave_period              ?? 7;
-  const weatherCode: number = cur.weather_code             ?? 0;
-  const windSpeed: number   = cur.wind_speed_10m           ?? 0;
-  const windDeg: number     = cur.wind_direction_10m       ?? 0;
-  const waterTemp: number   = mar.sea_surface_temperature  ?? cur.temperature_2m;
+  const waveH: number       = mar.wave_height             ?? 0.5;
+  const wavePeriod: number  = mar.wave_period             ?? 7;
+  const weatherCode: number = cur.weather_code            ?? 0;
+  const windSpeed: number   = cur.wind_speed_10m          ?? 0;
+  const windDeg: number     = cur.wind_direction_10m      ?? 0;
+  const waterTemp: number   = mar.sea_surface_temperature ?? cur.temperature_2m;
+
+  const score = calcScore(waveH, wavePeriod, windSpeed, windDeg, exposedTo, weatherCode);
 
   return {
-    waves: {
-      height: Math.round(waveH * 10) / 10,
-      unit: "m",
-      level: waveLevel(waveH),
-      period: Math.round(wavePeriod),
+    score,
+    suitability: scoreToSuitability(score),
+    conditions: {
+      waves: {
+        height: Math.round(waveH * 10) / 10,
+        unit: "m",
+        level: waveLevel(waveH),
+        period: Math.round(wavePeriod),
+      },
+      waterTemp: { value: Math.round(waterTemp), unit: "°C" },
+      weather: mapWeatherCode(weatherCode),
+      visibility: calcVisibility(waveH, wavePeriod, weatherCode),
+      wind: {
+        speed: Math.round(windSpeed),
+        unit: "km/h",
+        direction: degreesToCardinal(windDeg),
+      },
     },
-    waterTemp: {
-      value: Math.round(waterTemp),
-      unit: "°C",
-    },
-    weather: mapWeatherCode(weatherCode),
-    visibility: calcVisibility(waveH, wavePeriod, weatherCode),
-    wind: {
-      speed: Math.round(windSpeed),
-      unit: "km/h",
-      direction: degreesToCardinal(windDeg),
-    },
-    suitability: calcSuitability(waveH, wavePeriod, windSpeed, windDeg, exposedTo),
     lastUpdated: new Date().toISOString(),
   };
 }
 
+// Lee condiciones desde KV o llama a Open-Meteo si no hay cache
+async function getConditionsCached(
+  cache: KVNamespace | undefined,
+  spotId: string,
+  lat: number,
+  lng: number,
+  exposedTo: number
+): Promise<ConditionsResult | null> {
+  const cacheKey = `conditions:${spotId}`;
+
+  if (cache) {
+    const cached = await cache.get(cacheKey);
+    if (cached) return JSON.parse(cached) as ConditionsResult;
+  }
+
+  const result = await fetchConditions(lat, lng, exposedTo);
+  if (result && cache) {
+    await cache.put(cacheKey, JSON.stringify(result), { expirationTtl: 3600 });
+  }
+  return result;
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-type Bindings = CloudflareBindings & { CACHE?: KVNamespace };
-
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.use("*", cors());
 
-// GET /api/spot/:id — condiciones de un spot
-app.get("/api/spot/:id", async (c) => {
-  const spotId = c.req.param("id");
-
-  if (!SPOTS[spotId]) {
-    return c.json({ error: "Spot not found" }, 404);
-  }
-
-  const cacheKey = `conditions:${spotId}`;
-
-  if (c.env.CACHE) {
-    const cached = await c.env.CACHE.get(cacheKey);
-    if (cached) return c.json(JSON.parse(cached));
-  }
-
-  const result = await fetchConditions(spotId);
-  if (!result) return c.json({ error: "Failed to fetch weather data" }, 502);
-
-  if (c.env.CACHE) {
-    await c.env.CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 3600 });
-  }
-
-  return c.json(result);
-});
-
-// GET /api/spots — condiciones de todos los spots en una sola llamada
+// GET /api/spots — todos los spots (o filtrados por ?ids=las-canteras,el-cabron)
 app.get("/api/spots", async (c) => {
-  const spotIds = Object.keys(SPOTS);
+  const idsParam = c.req.query("ids");
+  const idList = idsParam ? idsParam.split(",").map(s => s.trim()).filter(Boolean) : null;
+
+  let spots: SpotRow[];
+  let facilitiesMap: Map<string, FacilityRow[]>;
+
+  try {
+    if (idList && idList.length > 0) {
+      const placeholders = idList.map(() => "?").join(",");
+      const [spotsResult, facilitiesResult] = await Promise.all([
+        c.env.DB
+          .prepare(`SELECT id, name, lat, lng, exposed_to, difficulty FROM spots WHERE id IN (${placeholders})`)
+          .bind(...idList)
+          .all<SpotRow>(),
+        c.env.DB
+          .prepare(`SELECT spot_id, type, available FROM facilities WHERE spot_id IN (${placeholders})`)
+          .bind(...idList)
+          .all<FacilityRow>(),
+      ]);
+      spots = spotsResult.results;
+      facilitiesMap = groupFacilities(facilitiesResult.results);
+    } else {
+      const [spotsResult, facilitiesResult] = await Promise.all([
+        c.env.DB
+          .prepare("SELECT id, name, lat, lng, exposed_to, difficulty FROM spots")
+          .all<SpotRow>(),
+        c.env.DB
+          .prepare("SELECT spot_id, type, available FROM facilities")
+          .all<FacilityRow>(),
+      ]);
+      spots = spotsResult.results;
+      facilitiesMap = groupFacilities(facilitiesResult.results);
+    }
+  } catch {
+    return c.json({ error: "Database error" }, 500);
+  }
 
   const results = await Promise.all(
-    spotIds.map(async (spotId) => {
-      const cacheKey = `conditions:${spotId}`;
+    spots.map(async (spot) => {
+      const cond = await getConditionsCached(
+        c.env.CACHE,
+        spot.id,
+        spot.lat,
+        spot.lng,
+        spot.exposed_to
+      );
+      if (!cond) return null;
 
-      if (c.env.CACHE) {
-        const cached = await c.env.CACHE.get(cacheKey);
-        if (cached) return [spotId, JSON.parse(cached)] as const;
-      }
-
-      const conditions = await fetchConditions(spotId);
-      if (!conditions) return [spotId, null] as const;
-
-      if (c.env.CACHE) {
-        await c.env.CACHE.put(cacheKey, JSON.stringify(conditions), { expirationTtl: 3600 });
-      }
-
-      return [spotId, conditions] as const;
+      return {
+        id:          spot.id,
+        name:        spot.name,
+        lat:         spot.lat,
+        lng:         spot.lng,
+        score:       cond.score,
+        suitability: cond.suitability,
+        conditions:  cond.conditions,
+        facilities:  facilitiesToFlags(facilitiesMap.get(spot.id) ?? []),
+        difficulty:  spot.difficulty,
+        lastUpdated: cond.lastUpdated,
+      };
     })
   );
 
-  const response = Object.fromEntries(results.filter(([, v]) => v !== null));
-  return c.json(response);
+  return c.json({ spots: results.filter(Boolean) });
+});
+
+// GET /api/spot/:id — detalle completo de un spot
+app.get("/api/spot/:id", async (c) => {
+  const spotId = c.req.param("id");
+
+  let spot: SpotRow | null;
+  let facilityRows: FacilityRow[];
+
+  try {
+    const [spotResult, facilitiesResult] = await Promise.all([
+      c.env.DB
+        .prepare(
+          "SELECT id, name, lat, lng, exposed_to, difficulty, description, image_url, entry_point, best_time FROM spots WHERE id = ?"
+        )
+        .bind(spotId)
+        .first<SpotRow>(),
+      c.env.DB
+        .prepare("SELECT spot_id, type, available FROM facilities WHERE spot_id = ?")
+        .bind(spotId)
+        .all<FacilityRow>(),
+    ]);
+    spot = spotResult ?? null;
+    facilityRows = facilitiesResult.results;
+  } catch {
+    return c.json({ error: "Database error" }, 500);
+  }
+
+  if (!spot) return c.json({ error: "Spot not found" }, 404);
+
+  const cond = await getConditionsCached(
+    c.env.CACHE,
+    spot.id,
+    spot.lat,
+    spot.lng,
+    spot.exposed_to
+  );
+  if (!cond) return c.json({ error: "Failed to fetch weather data" }, 502);
+
+  return c.json({
+    id:          spot.id,
+    name:        spot.name,
+    lat:         spot.lat,
+    lng:         spot.lng,
+    score:       cond.score,
+    suitability: cond.suitability,
+    conditions:  cond.conditions,
+    facilities:  facilitiesToFlags(facilityRows),
+    difficulty:  spot.difficulty,
+    description: spot.description,
+    imageUrl:    spot.image_url,
+    entryPoint:  spot.entry_point,
+    bestTime:    spot.best_time,
+    lastUpdated: cond.lastUpdated,
+  });
 });
 
 export default app;
